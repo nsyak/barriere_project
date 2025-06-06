@@ -3,6 +3,26 @@
 #include "stm32746g_discovery_lcd.h"
 #include "stm32746g_discovery_ts.h"
 
+static SemaphoreHandle_t lvglMutex;
+
+bool lvglLock(TickType_t xBlockTime)
+{
+    if (xSemaphoreTake(lvglMutex, xBlockTime) == pdTRUE)
+    {
+        return true;
+    }
+    return false;
+}
+
+bool lvglUnlock()
+{
+    if (xSemaphoreGive(lvglMutex) == pdTRUE)
+    {
+        return true;
+    }
+    return false;
+}
+
 static void lvglTask(void *pvParameters)
 {
     while (1)
@@ -14,6 +34,7 @@ static void lvglTask(void *pvParameters)
 
 static void my_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_map)
 {
+    xSemaphoreTake(lvglMutex, portMAX_DELAY);
     uint32_t *buf = (uint32_t *)px_map;
     int32_t x, y;
     for (y = area->y1; y <= area->y2; y++)
@@ -28,6 +49,7 @@ static void my_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *p
     // IMPORTANT!!!
     // Inform LVGL that you are ready with the flushing and buf is not used anymore
     lv_display_flush_ready(display);
+    xSemaphoreGive(lvglMutex);
 }
 
 static void my_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
@@ -56,6 +78,8 @@ void setup()
     BSP_LCD_LayerDefaultInit(0, LCD_FB_START_ADDRESS);
 
     BSP_TS_Init(480, 272);
+
+    lvglMutex = xSemaphoreCreateMutex();
 
     lv_init();
 
