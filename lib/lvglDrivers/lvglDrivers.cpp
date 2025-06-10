@@ -34,7 +34,7 @@ static void lvglTask(void *pvParameters)
 
 static void my_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_map)
 {
-    xSemaphoreTake(lvglMutex, portMAX_DELAY);
+   // xSemaphoreTake(lvglMutex, portMAX_DELAY);
     uint32_t *buf = (uint32_t *)px_map;
     int32_t x, y;
     for (y = area->y1; y <= area->y2; y++)
@@ -49,7 +49,7 @@ static void my_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *p
     // IMPORTANT!!!
     // Inform LVGL that you are ready with the flushing and buf is not used anymore
     lv_display_flush_ready(display);
-    xSemaphoreGive(lvglMutex);
+    //xSemaphoreGive(lvglMutex);
 }
 
 static void my_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
