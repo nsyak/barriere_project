@@ -7,8 +7,13 @@ lv_obj_t *barriereObj = nullptr; // Objet visuel de la barrière
 lv_obj_t *loginWindow = nullptr; // Fenêtre login
 lv_obj_t *pwdTextarea = nullptr; // Champ mot de passe
 static lv_obj_t *keyboard = nullptr; // Clavier global
-
+lv_obj_t *changePwdWindow = nullptr;
+static lv_obj_t *oldPwdTA = nullptr;
+static lv_obj_t *newPwdTA = nullptr;
+lv_obj_t *btnChangePwd = nullptr;
+static String currentPassword = "aa"; // Mot de passe par défaut
 bool connexionAcpt = false;
+
 // Animation de la barrière (angle en degrés * 10)
 void animerBarriere(int angleCible)
 {
@@ -38,6 +43,7 @@ static void ta_event_cb(lv_event_t * e)
     if(code == LV_EVENT_FOCUSED) {
         lv_keyboard_set_textarea(kb, ta);
         lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(kb);
     }
 
     if(code == LV_EVENT_DEFOCUSED) {
@@ -65,7 +71,7 @@ static void btnOk_event_handler(lv_event_t * e)
     //Ferme le clavier
     if (keyboard) lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
     
-    if (strcmp(txt, "aa") == 0) // Mot de passe OK
+    if (strcmp(txt, currentPassword.c_str()) == 0) // Mot de passe OK
     {
         Serial.println("Mot de passe correct, ouverture barrière");
         // Supprimer la fenêtre login
@@ -84,14 +90,71 @@ static void btnOk_event_handler(lv_event_t * e)
     }
 }
 
+void createChangePwdWindow()
+{
+    if (changePwdWindow) return;
+
+    // Fenêtre plein écran
+    changePwdWindow = lv_win_create(lv_scr_act());
+    lv_obj_set_size(changePwdWindow, 480, 272);
+    lv_obj_align(changePwdWindow, LV_ALIGN_CENTER, 0, 0);
+
+    // Titre dans l'en-tête
+    lv_obj_t *title = lv_label_create(lv_win_get_header(changePwdWindow));
+    lv_label_set_text(title, "Changer mot de passe");
+    lv_obj_center(title);
+
+    // Ancien mot de passe
+    oldPwdTA = lv_textarea_create(changePwdWindow);
+    lv_obj_set_size(oldPwdTA, 380, 50);
+    lv_obj_align(oldPwdTA, LV_ALIGN_TOP_MID, 0, 30);
+    lv_textarea_set_password_mode(oldPwdTA, true);
+    lv_textarea_set_placeholder_text(oldPwdTA, "Ancien mot de passe");
+
+    // Nouveau mot de passe
+    newPwdTA = lv_textarea_create(changePwdWindow);
+    lv_obj_set_size(newPwdTA, 380, 50);
+    lv_obj_align(newPwdTA, LV_ALIGN_TOP_MID, 0, 100);
+    lv_textarea_set_password_mode(newPwdTA, true);
+    lv_textarea_set_placeholder_text(newPwdTA, "Nouveau mot de passe");
+
+    // Associer le clavier
+    lv_obj_add_event_cb(oldPwdTA, ta_event_cb, LV_EVENT_ALL, keyboard);
+    lv_obj_add_event_cb(newPwdTA, ta_event_cb, LV_EVENT_ALL, keyboard);
+
+    // Bouton valider
+    lv_obj_t *btnSave = lv_btn_create(changePwdWindow);
+    lv_obj_set_size(btnSave, 150, 50);
+    lv_obj_align(btnSave, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_t *labelSave = lv_label_create(btnSave);
+    lv_label_set_text(labelSave, "Valider");
+    lv_obj_center(labelSave);
+
+    // Callback bouton
+    lv_obj_add_event_cb(btnSave, [](lv_event_t *e) {
+        const char *oldPwd = lv_textarea_get_text(oldPwdTA);
+        const char *newPwd = lv_textarea_get_text(newPwdTA);
+
+        if (strcmp(oldPwd, currentPassword.c_str()) == 0 && strlen(newPwd) > 0) {
+            currentPassword = String(newPwd);
+            Serial.println("Mot de passe modifié avec succès");
+            lv_obj_del(changePwdWindow);
+            changePwdWindow = nullptr;
+        } else {
+            Serial.println("Ancien mot de passe incorrect ou nouveau vide");
+        }
+    }, LV_EVENT_CLICKED, nullptr);
+}
+
+
 // Création de la fenêtre login
 void createLoginWindow()
 {
     if (loginWindow != nullptr) return;
     lv_obj_add_flag(barriereObj, LV_OBJ_FLAG_HIDDEN); // Masquer
     loginWindow = lv_win_create(lv_scr_act());
-    lv_obj_set_size(loginWindow, 240, 160);
-    lv_obj_center(loginWindow);
+    lv_obj_set_size(loginWindow, 480, 272);
+    lv_obj_align(loginWindow, LV_ALIGN_CENTER, 0, 0);
 
     lv_obj_t *header = lv_win_get_header(loginWindow);
     lv_obj_t *title = lv_label_create(header);
@@ -100,7 +163,7 @@ void createLoginWindow()
 
     // Champ mot de passe
     pwdTextarea = lv_textarea_create(loginWindow);
-    lv_obj_set_size(pwdTextarea, 180, 40);
+    lv_obj_set_size(pwdTextarea, 380, 50);
     lv_obj_align(pwdTextarea, LV_ALIGN_TOP_MID, 0, 30);
     lv_textarea_set_password_mode(pwdTextarea, true);
     lv_textarea_set_placeholder_text(pwdTextarea, "Mot de passe");
@@ -119,13 +182,26 @@ void createLoginWindow()
 
     // Bouton Valider
     lv_obj_t *btnOk = lv_btn_create(loginWindow);
-    lv_obj_set_size(btnOk, 80, 40);
+    lv_obj_set_size(btnOk, 150, 50);
     lv_obj_align(btnOk, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_t *labelOk = lv_label_create(btnOk);
     lv_label_set_text(labelOk, "Valider");
     lv_obj_center(labelOk);
 
     lv_obj_add_event_cb(btnOk, btnOk_event_handler, LV_EVENT_CLICKED, nullptr);
+
+    // Bouton changement mot de passe
+    btnChangePwd = lv_btn_create(loginWindow);
+    lv_obj_set_size(btnChangePwd, 200, 50);
+    lv_obj_align(btnChangePwd, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+    lv_obj_t *labelChange = lv_label_create(btnChangePwd);
+    lv_label_set_text(labelChange, "Changer de mot de passe");
+    lv_obj_center(labelChange);
+    lv_obj_add_event_cb(btnChangePwd, [](lv_event_t *e) {
+    lv_obj_add_flag(btnChangePwd, LV_OBJ_FLAG_HIDDEN); // <<== On cache le bouton
+    createChangePwdWindow();
+    }, LV_EVENT_CLICKED, nullptr);
+
 }
 
 #ifdef ARDUINO
