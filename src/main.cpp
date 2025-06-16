@@ -12,7 +12,10 @@ static lv_obj_t *oldPwdTA = nullptr;
 static lv_obj_t *newPwdTA = nullptr;
 lv_obj_t *btnChangePwd = nullptr;
 static String currentPassword = "aa"; // Mot de passe par défaut
-bool connexionAcpt = false;
+volatile bool connexionAcpt = false;
+int voitureCount = 0;
+lv_obj_t *voitureLabel = nullptr;
+
 
 // Animation de la barrière (angle en degrés * 10)
 void animerBarriere(int angleCible)
@@ -62,6 +65,10 @@ void testLvgl()
     lv_obj_set_style_transform_pivot_x(barriereObj, 0, 0);
     lv_obj_set_style_transform_pivot_y(barriereObj, 100, 0);
     lv_obj_set_style_transform_angle(barriereObj, 900, 0); // Barrière fermée (90°)
+    // Label compteur de voitures
+    voitureLabel = lv_label_create(lv_scr_act());
+    lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
+    lv_obj_align(voitureLabel, LV_ALIGN_TOP_RIGHT, -10, 10);  // En haut à droite
 }
 
 // Handler bouton valider de la fenêtre login
@@ -75,10 +82,10 @@ static void btnOk_event_handler(lv_event_t * e)
     {
         Serial.println("Mot de passe correct, ouverture barrière");
         // Supprimer la fenêtre login
-        lv_obj_del(loginWindow);
-        loginWindow = nullptr;
-        pwdTextarea = nullptr;
-        lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN); // Afficher
+        // lv_obj_del(loginWindow);
+        // loginWindow = nullptr;
+        // pwdTextarea = nullptr;
+        // lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN); // Afficher
         connexionAcpt = true;
     }
     else
@@ -230,74 +237,134 @@ void loop()
 
 void myTask(void *pvParameters)
 {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    int angle = 1000;
+    int angle = 2000;
     MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
+
+    int prevEtatAvant = digitalRead(D4);
+    int prevEtatApres = digitalRead(D5);
+    bool enAttentePassage = false;// variable qui assure que la page de connexion ne re apparait pas tant que la voiture n'est pas encore passé
 
     while (1)
     {
-        int etatCapteurAvantPassage = digitalRead(D4);
-        int etatCapteurApresPassage = digitalRead(D5);
+        int etatAvant = digitalRead(D4);
+        int etatApres = digitalRead(D5);
+        bool connexionAcceptee = false;
 
-        if (etatCapteurAvantPassage == LOW && etatCapteurApresPassage != LOW)
+        // === CAS 1 : Détection entrée ===
+        if (etatAvant == LOW && etatApres != LOW && !enAttentePassage)
         {
-            Serial.println("Détection avant passage, demande login");
+            enAttentePassage = true;
+            Serial.println("Détection entrée");
 
-            // Affiche fenêtre login si pas déjà visible
-            if (!loginWindow)
-            {
+            if (voitureCount >= 3) {
+                Serial.println("Parking plein !");
                 lvglLock();
-                createLoginWindow();
+                lv_label_set_text(voitureLabel, "Plus de place !");
                 lvglUnlock();
+                vTaskDelay(2000);
+                continue;
             }
 
-            // Attend que la fenêtre login soit fermée (mot de passe validé)
-            while (loginWindow != nullptr)
-            {
+            if (!loginWindow) {
+                vTaskDelay(200);
+                lvglLock();
+                createLoginWindow(); 
+                lvglUnlock();
+                vTaskDelay(200);
+            }
+
+            // Attente login accepté ou timeout
+            while (loginWindow != nullptr) {
+                // Timeout
+                if (digitalRead(D4) == HIGH) {
+                    Serial.println("Annulation demande de connexion");
+                    lvglLock();
+                    lv_obj_del(loginWindow);
+                    loginWindow = nullptr;
+                    pwdTextarea = nullptr;
+                    lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
+                    lvglUnlock();
+                    vTaskDelay(500);
+                    enAttentePassage = false; // Libère la détection future
+                    break;
+                }
+
+                // Si l'utilisateur a été validé
+                if (connexionAcpt) {
+                    connexionAcceptee = true;
+                    connexionAcpt = false; // réinitialisation
+                    lvglLock();
+                    lv_obj_del(loginWindow);
+                    loginWindow = nullptr;
+                    pwdTextarea = nullptr;
+                    lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
+                    lvglUnlock();
+                    break;
+                }
+
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
 
-            if(connexionAcpt){
-            // Ouvrir la barrière (PWM + animation)
-            int angle = 2000;
-            MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
-            animerBarriere(0);
-            vTaskDelay(100); // Barrière ouverte 2s
-            while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
-            vTaskDelay(500);
-            // Refermer la barrière
-            angle = 1000;
-            MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
-            animerBarriere(90);
-            vTaskDelay(500);
-            Serial.println("Barrière refermée");
-            connexionAcpt = false;
+            // Si login réussi, ouverture barrière
+            if (connexionAcceptee) {
+                voitureCount++;
+                if (voitureCount > 10) voitureCount = 10;
+
+                lvglLock();
+                lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
+                lvglUnlock();
+
+                angle = 1100;
+                MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
+                animerBarriere(0);
+                vTaskDelay(pdMS_TO_TICKS(900));
+
+                while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+
+                angle = 2000;
+                MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
+                animerBarriere(90);
+                vTaskDelay(pdMS_TO_TICKS(900));
+                Serial.println("Entrée terminée");
+                enAttentePassage = false; // Libère la détection future
             }
         }
-        else if (etatCapteurApresPassage == LOW && etatCapteurAvantPassage != LOW)
-        {
-            Serial.println("Passage arrière détecté, pas d'action login");
 
-            // Optionnel : traitement passage arrière (existant dans ton code)
-            angle = 2000;
+        // === CAS 2 : Détection sortie ===
+        else if (etatApres == LOW && etatAvant != LOW)
+        {
+            Serial.println("Détection sortie");
+
+            if (voitureCount > 0) voitureCount--;
+
+            lvglLock();
+            lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
+            lvglUnlock();
+
+            angle = 1100;
             MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
             animerBarriere(0);
-            vTaskDelay(100);
+            vTaskDelay(pdMS_TO_TICKS(900));
+
             while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
-                vTaskDelay(100);
-            angle = 1000;
+                vTaskDelay(pdMS_TO_TICKS(1000));
+
+            angle = 2000;
             MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
             animerBarriere(90);
-            vTaskDelay(500);
-        }
-        else
-        {
-            Serial.println("pas obstacle");
+            vTaskDelay(pdMS_TO_TICKS(900));
+            Serial.println("Sortie terminée");
         }
 
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(200));
+        // Mise à jour états précédents
+        prevEtatAvant = etatAvant;
+        prevEtatApres = etatApres;
+
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
+
 
 #else
 
