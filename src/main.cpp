@@ -25,9 +25,9 @@ void updateSimulatedTimeLabel(time_t fakeTime)
     struct tm *heure = localtime(&fakeTime);
     char buf[16];
     snprintf(buf, sizeof(buf), "%02d:%02d:%02d", heure->tm_hour, heure->tm_min, heure->tm_sec);
-    lvglLock();
+    lv_lock();
     lv_label_set_text(heureLabel, buf);
-    lvglUnlock();
+    lv_unlock();
 }
 
 // Animation de la barrière (angle en degrés * 10)
@@ -95,19 +95,13 @@ static void btnOk_event_handler(lv_event_t * e)
     const char *txt = lv_textarea_get_text(pwdTextarea);
     //Ferme le clavier
     if (keyboard) {
-    lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_keyboard_set_textarea(keyboard, NULL);
-}
+        lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+        lv_keyboard_set_textarea(keyboard, NULL);
+    }
 
-    
     if (strcmp(txt, currentPassword.c_str()) == 0) // Mot de passe OK
     {
         Serial.println("Mot de passe correct, ouverture barrière");
-        // Supprimer la fenêtre login
-        // lv_obj_del(loginWindow);
-        // loginWindow = nullptr;
-        // pwdTextarea = nullptr;
-        // lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN); // Afficher
         connexionAcpt = true;
     }
     else
@@ -169,6 +163,7 @@ void createChangePwdWindow()
             Serial.println("Mot de passe modifié avec succès");
             lv_obj_del(changePwdWindow);
             changePwdWindow = nullptr;
+            lv_obj_clear_flag(btnChangePwd, LV_OBJ_FLAG_HIDDEN);
         } else {
             Serial.println("Ancien mot de passe incorrect ou nouveau vide");
         }
@@ -179,7 +174,16 @@ void createChangePwdWindow()
 // Création de la fenêtre login
 void createLoginWindow()
 {
-    if (loginWindow != nullptr) return;
+    if (loginWindow != nullptr) {
+
+        lv_obj_clear_flag(loginWindow, LV_OBJ_FLAG_HIDDEN);
+        if (pwdTextarea) lv_textarea_set_text(pwdTextarea, "");
+        if (keyboard) {
+            lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+            lv_keyboard_set_textarea(keyboard, NULL);
+        }
+        return;
+    }
     lv_obj_add_flag(barriereObj, LV_OBJ_FLAG_HIDDEN); // Masquer
     loginWindow = lv_win_create(lv_scr_act());
     lv_obj_set_size(loginWindow, 480, 272);
@@ -230,7 +234,6 @@ void createLoginWindow()
     lv_obj_add_flag(btnChangePwd, LV_OBJ_FLAG_HIDDEN); // <<== On cache le bouton
     createChangePwdWindow();
     }, LV_EVENT_CLICKED, nullptr);
-
 }
 
 #ifdef ARDUINO
@@ -293,12 +296,12 @@ void myTask(void *pvParameters)
                     lvglLock();
                     lv_label_set_text(voitureLabel, "Plus de place !");
                     lvglUnlock();
-                    vTaskDelay(pdMS_TO_TICKS(2000));
+                    vTaskDelay(pdMS_TO_TICKS(100));
                 }
                 else if (localtime(&fakeTime)->tm_hour == 17) // entrée automatique à 17h
                 {
                     voitureCount++;
-                    if (voitureCount > 10) voitureCount = 10;
+                    if (voitureCount > 3) voitureCount = 3;
 
                     lvglLock();
                     lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
@@ -311,8 +314,12 @@ void myTask(void *pvParameters)
                     vTaskDelay(pdMS_TO_TICKS(900));
 
                     // Attendre passage voiture
-                    while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
+                    while (digitalRead(D4) == LOW || digitalRead(D5) == LOW) {
+                        // Met à jour l'heure simulée
+                        fakeTime++;
+                        updateSimulatedTimeLabel(fakeTime);
                         vTaskDelay(pdMS_TO_TICKS(1000));
+                    }
 
                     // Fermer barrière
                     MyTim->setCaptureCompare(1, 2000, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
@@ -323,10 +330,10 @@ void myTask(void *pvParameters)
                 else
                 {
                     // Créer fenêtre login
-                    lvglLock();
-                    createLoginWindow();
+                    lv_lock();
+                    createLoginWindow(); // Appelle toujours la fonction, elle gère l'affichage
                     lv_obj_add_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
-                    lvglUnlock();
+                    lv_unlock();
                     enAttenteConnexion = true;
                     connexionAcceptee = false;
                 }
@@ -338,9 +345,9 @@ void myTask(void *pvParameters)
 
                 if (voitureCount > 0) voitureCount--;
 
-                lvglLock();
+                lv_lock();
                 lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
-                lvglUnlock();
+                lv_unlock();
 
                 // Ouvrir barrière
                 MyTim->setCaptureCompare(1, 1100, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
@@ -348,8 +355,12 @@ void myTask(void *pvParameters)
                 vTaskDelay(pdMS_TO_TICKS(900));
 
                 // Attendre passage voiture
-                while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
+                while (digitalRead(D4) == LOW || digitalRead(D5) == LOW) {
+                    // Met à jour l'heure simulée
+                    fakeTime++;
+                    updateSimulatedTimeLabel(fakeTime);
                     vTaskDelay(pdMS_TO_TICKS(1000));
+                }
 
                 // Fermer barrière
                 MyTim->setCaptureCompare(1, 2000, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
@@ -374,22 +385,24 @@ void myTask(void *pvParameters)
 
             if (connexionAcceptee || digitalRead(D4) == HIGH)
             {
-                // Fermer fenêtre login
-                lvglLock();
-                if (loginWindow)
-                {
+                Serial.println("On va cacher la fenêtre login !");
+                lv_lock();
+                if (keyboard) {
+                    lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+                    lv_keyboard_set_textarea(keyboard, NULL);
+                }
+                if (loginWindow) {
                     lv_obj_add_flag(loginWindow, LV_OBJ_FLAG_HIDDEN);
-                    pwdTextarea = nullptr;
                 }
                 lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
-                lvglUnlock();
+                lv_unlock();
 
                 enAttenteConnexion = false;
 
                 if (connexionAcceptee)
                 {
                     voitureCount++;
-                    if (voitureCount > 10) voitureCount = 10;
+                    if (voitureCount > 3) voitureCount = 3;
 
                     lvglLock();
                     lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
@@ -401,8 +414,12 @@ void myTask(void *pvParameters)
                     vTaskDelay(pdMS_TO_TICKS(900));
 
                     // Attendre passage voiture
-                    while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
+                    while (digitalRead(D4) == LOW || digitalRead(D5) == LOW) {
+                        // Met à jour l'heure simulée
+                        fakeTime++;
+                        updateSimulatedTimeLabel(fakeTime);
                         vTaskDelay(pdMS_TO_TICKS(1000));
+                    }
 
                     // Fermer barrière
                     MyTim->setCaptureCompare(1, 2000, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
