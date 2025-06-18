@@ -5,6 +5,7 @@
 
 HardwareTimer *MyTim = new HardwareTimer(TIM2);
 lv_obj_t *barriereObj = nullptr; // Objet visuel de la barrière
+lv_obj_t *barriereContainer = nullptr;// Conteneur de la barrière
 lv_obj_t *loginWindow = nullptr; // Fenêtre login
 lv_obj_t *pwdTextarea = nullptr; // Champ mot de passe
 static lv_obj_t *keyboard = nullptr; // Clavier global
@@ -71,21 +72,62 @@ static void ta_event_cb(lv_event_t * e)
 // Création de la barrière visuelle
 void testLvgl()
 {
-    barriereObj = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(barriereObj, 10, 100);
-    lv_obj_set_style_bg_color(barriereObj, lv_palette_main(LV_PALETTE_RED), 0);
-    lv_obj_align(barriereObj, LV_ALIGN_CENTER, 50, -50);
-    lv_obj_set_style_transform_pivot_x(barriereObj, 0, 0);
-    lv_obj_set_style_transform_pivot_y(barriereObj, 100, 0);
+    // Taille du conteneur
+    int largeur = 200;
+    int hauteur = 180;
+
+    // Conteneur centré
+    barriereContainer = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(barriereContainer, largeur, hauteur);
+    lv_obj_align(barriereContainer, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_clear_flag(barriereContainer, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Socle (base)
+    lv_obj_t *socle = lv_obj_create(barriereContainer);
+    lv_obj_set_size(socle, 40, 40);
+    lv_obj_align(socle, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(socle, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_radius(socle, 8, 0);
+
+    // Barrière mobile (bras) - parent
+    barriereObj = lv_obj_create(barriereContainer);
+    lv_obj_set_size(barriereObj, 12, 120);
+    lv_obj_align_to(barriereObj, socle, LV_ALIGN_OUT_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(barriereObj, lv_color_white(), 0); // Couleur de fond blanche
+    lv_obj_set_style_radius(barriereObj, 4, 0);
+    lv_obj_set_style_pad_all(barriereObj, 0, 0);
+
+    // Définir le pivot de rotation à la base du bras
+    lv_obj_set_style_transform_pivot_x(barriereObj, 6, 0); // centre en largeur
+    lv_obj_set_style_transform_pivot_y(barriereObj, 120, 0); // base du bras
+
     lv_obj_set_style_transform_angle(barriereObj, 900, 0); // Barrière fermée (90°)
+
+    // Ajout des rayures rouges et blanches
+    int nb_rayures = 8;
+    int hauteur_r = 120 / nb_rayures;
+    for (int i = 0; i < nb_rayures; ++i) {
+        lv_obj_t *rayure = lv_obj_create(barriereObj);
+        lv_obj_set_size(rayure, 12, hauteur_r);
+        lv_obj_align(rayure, LV_ALIGN_TOP_MID, 0, i * hauteur_r);
+        if (i % 2 == 0)
+            lv_obj_set_style_bg_color(rayure, lv_palette_main(LV_PALETTE_RED), 0);
+        else
+            lv_obj_set_style_bg_color(rayure, lv_color_white(), 0);
+        lv_obj_set_style_border_width(rayure, 0, 0);
+        lv_obj_set_style_radius(rayure, 0, 0);
+        lv_obj_set_style_pad_all(rayure, 0, 0);
+    }
+
     // Label compteur de voitures
     voitureLabel = lv_label_create(lv_scr_act());
     lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
-    lv_obj_align(voitureLabel, LV_ALIGN_TOP_RIGHT, -10, 10);  // En haut à droite
+    lv_obj_align(voitureLabel, LV_ALIGN_TOP_RIGHT, -10, 10);
+
     // Label heure simulée en haut à gauche
     heureLabel = lv_label_create(lv_scr_act());
     lv_label_set_text(heureLabel, "00:00:00");
-    lv_obj_align(heureLabel, LV_ALIGN_TOP_LEFT, 10, 10);  // Petit décalage vers la droite et le bas
+    lv_obj_align(heureLabel, LV_ALIGN_TOP_LEFT, 10, 10);
 }
 
 // Handler bouton valider de la fenêtre login
@@ -184,7 +226,7 @@ void createLoginWindow()
         }
         return;
     }
-    lv_obj_add_flag(barriereObj, LV_OBJ_FLAG_HIDDEN); // Masquer
+    lv_obj_add_flag(barriereContainer, LV_OBJ_FLAG_HIDDEN); // Masquer
     loginWindow = lv_win_create(lv_scr_act());
     lv_obj_set_size(loginWindow, 480, 272);
     lv_obj_align(loginWindow, LV_ALIGN_CENTER, 0, 0);
@@ -305,7 +347,7 @@ void myTask(void *pvParameters)
 
                     lvglLock();
                     lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
-                    lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_clear_flag(barriereContainer, LV_OBJ_FLAG_HIDDEN);
                     lvglUnlock();
 
                     // Ouvrir barrière
@@ -332,7 +374,7 @@ void myTask(void *pvParameters)
                     // Créer fenêtre login
                     lv_lock();
                     createLoginWindow(); // Appelle toujours la fonction, elle gère l'affichage
-                    lv_obj_add_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_add_flag(barriereContainer, LV_OBJ_FLAG_HIDDEN);
                     lv_unlock();
                     enAttenteConnexion = true;
                     connexionAcceptee = false;
@@ -394,7 +436,7 @@ void myTask(void *pvParameters)
                 if (loginWindow) {
                     lv_obj_add_flag(loginWindow, LV_OBJ_FLAG_HIDDEN);
                 }
-                lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(barriereContainer, LV_OBJ_FLAG_HIDDEN);
                 lv_unlock();
 
                 enAttenteConnexion = false;
