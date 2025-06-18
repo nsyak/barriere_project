@@ -1,6 +1,7 @@
 #include "lvgl.h"
 #include "lvglDrivers.h"
 #include <HardwareTimer.h>
+#include "timer.h"
 
 HardwareTimer *MyTim = new HardwareTimer(TIM2);
 lv_obj_t *barriereObj = nullptr; // Objet visuel de la barrière
@@ -15,7 +16,19 @@ static String currentPassword = "aa"; // Mot de passe par défaut
 volatile bool connexionAcpt = false;
 int voitureCount = 0;
 lv_obj_t *voitureLabel = nullptr;
+// Ajout du label pour l'heure simulée 
+lv_obj_t *heureLabel = nullptr;
 
+
+void updateSimulatedTimeLabel(time_t fakeTime)
+{
+    struct tm *heure = localtime(&fakeTime);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d", heure->tm_hour, heure->tm_min, heure->tm_sec);
+    lvglLock();
+    lv_label_set_text(heureLabel, buf);
+    lvglUnlock();
+}
 
 // Animation de la barrière (angle en degrés * 10)
 void animerBarriere(int angleCible)
@@ -69,14 +82,23 @@ void testLvgl()
     voitureLabel = lv_label_create(lv_scr_act());
     lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
     lv_obj_align(voitureLabel, LV_ALIGN_TOP_RIGHT, -10, 10);  // En haut à droite
+    // Label heure simulée en haut à gauche
+    heureLabel = lv_label_create(lv_scr_act());
+    lv_label_set_text(heureLabel, "00:00:00");
+    lv_obj_align(heureLabel, LV_ALIGN_TOP_LEFT, 10, 10);  // Petit décalage vers la droite et le bas
 }
 
 // Handler bouton valider de la fenêtre login
 static void btnOk_event_handler(lv_event_t * e)
 {
+    if (!pwdTextarea) return;
     const char *txt = lv_textarea_get_text(pwdTextarea);
     //Ferme le clavier
-    if (keyboard) lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+    if (keyboard) {
+    lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_keyboard_set_textarea(keyboard, NULL);
+}
+
     
     if (strcmp(txt, currentPassword.c_str()) == 0) // Mot de passe OK
     {
@@ -237,133 +259,168 @@ void loop()
 
 void myTask(void *pvParameters)
 {
-    int angle = 2000;
-    MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
-
-    int prevEtatAvant = digitalRead(D4);
-    int prevEtatApres = digitalRead(D5);
-    bool enAttentePassage = false;// variable qui assure que la page de connexion ne re apparait pas tant que la voiture n'est pas encore passé
+    static time_t fakeTime = 16 * 3600 + 59 * 60; // 16:59:00 au départ
+    int prevEtatAvant = HIGH;
+    int prevEtatApres = HIGH;
+    bool enAttenteConnexion = false;
+    bool connexionAcceptee = false;
 
     while (1)
     {
+        // Mise à jour heure simulée toutes les secondes
+        static TickType_t dernierUpdateHeure = 0;
+        TickType_t now = xTaskGetTickCount();
+        if (now - dernierUpdateHeure >= pdMS_TO_TICKS(1000))
+        {
+            dernierUpdateHeure = now;
+            fakeTime++;
+            updateSimulatedTimeLabel(fakeTime);
+        }
+
         int etatAvant = digitalRead(D4);
         int etatApres = digitalRead(D5);
-        bool connexionAcceptee = false;
 
-        // === CAS 1 : Détection entrée ===
-        if (etatAvant == LOW && etatApres != LOW && !enAttentePassage)
+        if (!enAttenteConnexion)
         {
-            enAttentePassage = true;
-            Serial.println("Détection entrée");
+            // Détection entrée voiture (front descendant sur D4)
+            if (etatAvant == LOW && prevEtatAvant == HIGH && etatApres != LOW)
+            {
+                Serial.println("Détection entrée");
 
-            if (voitureCount >= 3) {
-                Serial.println("Parking plein !");
-                lvglLock();
-                lv_label_set_text(voitureLabel, "Plus de place !");
-                lvglUnlock();
-                vTaskDelay(2000);
-                continue;
-            }
-
-            if (!loginWindow) {
-                vTaskDelay(200);
-                lvglLock();
-                createLoginWindow(); 
-                lvglUnlock();
-                vTaskDelay(200);
-            }
-
-            // Attente login accepté ou timeout
-            while (loginWindow != nullptr) {
-                // Timeout
-                if (digitalRead(D4) == HIGH) {
-                    Serial.println("Annulation demande de connexion");
+                if (voitureCount >= 3)
+                {
+                    Serial.println("Parking plein !");
                     lvglLock();
-                    lv_obj_del(loginWindow);
-                    loginWindow = nullptr;
-                    pwdTextarea = nullptr;
+                    lv_label_set_text(voitureLabel, "Plus de place !");
+                    lvglUnlock();
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                }
+                else if (localtime(&fakeTime)->tm_hour == 17) // entrée automatique à 17h
+                {
+                    voitureCount++;
+                    if (voitureCount > 10) voitureCount = 10;
+
+                    lvglLock();
+                    lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
                     lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
                     lvglUnlock();
-                    vTaskDelay(500);
-                    enAttentePassage = false; // Libère la détection future
-                    break;
-                }
 
-                // Si l'utilisateur a été validé
-                if (connexionAcpt) {
-                    connexionAcceptee = true;
-                    connexionAcpt = false; // réinitialisation
+                    // Ouvrir barrière
+                    MyTim->setCaptureCompare(1, 1100, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
+                    animerBarriere(0);
+                    vTaskDelay(pdMS_TO_TICKS(900));
+
+                    // Attendre passage voiture
+                    while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+
+                    // Fermer barrière
+                    MyTim->setCaptureCompare(1, 2000, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
+                    animerBarriere(90);
+                    vTaskDelay(pdMS_TO_TICKS(900));
+                    Serial.println("Entrée automatique (17h)");
+                }
+                else
+                {
+                    // Créer fenêtre login
                     lvglLock();
-                    lv_obj_del(loginWindow);
-                    loginWindow = nullptr;
-                    pwdTextarea = nullptr;
-                    lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
+                    createLoginWindow();
+                    lv_obj_add_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
                     lvglUnlock();
-                    break;
+                    enAttenteConnexion = true;
+                    connexionAcceptee = false;
                 }
-
-                vTaskDelay(pdMS_TO_TICKS(100));
             }
+            // Détection sortie voiture (front descendant sur D5)
+            else if (etatApres == LOW && prevEtatApres == HIGH && etatAvant != LOW)
+            {
+                Serial.println("Détection sortie");
 
-            // Si login réussi, ouverture barrière
-            if (connexionAcceptee) {
-                voitureCount++;
-                if (voitureCount > 10) voitureCount = 10;
+                if (voitureCount > 0) voitureCount--;
 
                 lvglLock();
                 lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
                 lvglUnlock();
 
-                angle = 1100;
-                MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
+                // Ouvrir barrière
+                MyTim->setCaptureCompare(1, 1100, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
                 animerBarriere(0);
                 vTaskDelay(pdMS_TO_TICKS(900));
 
+                // Attendre passage voiture
                 while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
                     vTaskDelay(pdMS_TO_TICKS(1000));
 
-                angle = 2000;
-                MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
+                // Fermer barrière
+                MyTim->setCaptureCompare(1, 2000, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
                 animerBarriere(90);
                 vTaskDelay(pdMS_TO_TICKS(900));
-                Serial.println("Entrée terminée");
-                enAttentePassage = false; // Libère la détection future
+                Serial.println("Sortie terminée");
+            }
+        }
+        else
+        {
+            // En attente connexion dans fenêtre login
+            if (connexionAcpt)
+            {
+                connexionAcceptee = true;
+                connexionAcpt = false;
+            }
+            else if (digitalRead(D4) == HIGH)
+            {
+                // Annuler la demande
+                connexionAcceptee = false;
+            }
+
+            if (connexionAcceptee || digitalRead(D4) == HIGH)
+            {
+                // Fermer fenêtre login
+                lvglLock();
+                if (loginWindow)
+                {
+                    lv_obj_add_flag(loginWindow, LV_OBJ_FLAG_HIDDEN);
+                    pwdTextarea = nullptr;
+                }
+                lv_obj_clear_flag(barriereObj, LV_OBJ_FLAG_HIDDEN);
+                lvglUnlock();
+
+                enAttenteConnexion = false;
+
+                if (connexionAcceptee)
+                {
+                    voitureCount++;
+                    if (voitureCount > 10) voitureCount = 10;
+
+                    lvglLock();
+                    lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
+                    lvglUnlock();
+
+                    // Ouvrir barrière
+                    MyTim->setCaptureCompare(1, 1100, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
+                    animerBarriere(0);
+                    vTaskDelay(pdMS_TO_TICKS(900));
+
+                    // Attendre passage voiture
+                    while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+
+                    // Fermer barrière
+                    MyTim->setCaptureCompare(1, 2000, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
+                    animerBarriere(90);
+                    vTaskDelay(pdMS_TO_TICKS(900));
+                    Serial.println("Entrée terminée");
+                }
             }
         }
 
-        // === CAS 2 : Détection sortie ===
-        else if (etatApres == LOW && etatAvant != LOW)
-        {
-            Serial.println("Détection sortie");
-
-            if (voitureCount > 0) voitureCount--;
-
-            lvglLock();
-            lv_label_set_text_fmt(voitureLabel, "Voitures: %d", voitureCount);
-            lvglUnlock();
-
-            angle = 1100;
-            MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
-            animerBarriere(0);
-            vTaskDelay(pdMS_TO_TICKS(900));
-
-            while (digitalRead(D4) == LOW || digitalRead(D5) == LOW)
-                vTaskDelay(pdMS_TO_TICKS(1000));
-
-            angle = 2000;
-            MyTim->setCaptureCompare(1, angle, TimerCompareFormat_t::MICROSEC_COMPARE_FORMAT);
-            animerBarriere(90);
-            vTaskDelay(pdMS_TO_TICKS(900));
-            Serial.println("Sortie terminée");
-        }
-
-        // Mise à jour états précédents
         prevEtatAvant = etatAvant;
         prevEtatApres = etatApres;
 
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
+
+
 
 
 #else
